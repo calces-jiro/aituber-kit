@@ -49,6 +49,7 @@ export const MessageInput = ({
   isSpeaking,
   silenceTimeoutRemaining,
   continuousMicListeningMode,
+  onToggleContinuousMode,
 }: Props) => {
   const chatProcessing = homeStore((s) => s.chatProcessing)
   const slidePlaying = slideStore((s) => s.isPlaying)
@@ -72,6 +73,11 @@ export const MessageInput = ({
   const previousChatProcessingRef = useRef<boolean | null>(null)
   const realtimeAPIMode = settingsStore((s) => s.realtimeAPIMode)
   const showSilenceProgressBar = settingsStore((s) => s.showSilenceProgressBar)
+  const speechRecognitionMode = settingsStore((s) => s.speechRecognitionMode)
+
+  // 常時マイク入力はブラウザ音声認識モード専用のため、それ以外では切替バッジを出さない
+  const showContinuousMicToggle =
+    speechRecognitionMode === 'browser' && !realtimeAPIMode
 
   const { t } = useTranslation()
 
@@ -676,6 +682,35 @@ export const MessageInput = ({
                 isProcessing={false}
                 data-testid="chat-stop-button"
               />
+
+              {showContinuousMicToggle && (
+                <IconButton
+                  iconName="24/Microphone"
+                  label={continuousMicListeningMode ? 'ON' : 'OFF'}
+                  labelClassName="!mx-1 mr-1.5 text-xs"
+                  backgroundColor={
+                    continuousMicListeningMode
+                      ? 'bg-green-600 hover:bg-green-500'
+                      : 'bg-[var(--aurora-control-bg)] hover:bg-[var(--aurora-control-bg-hover)]'
+                  }
+                  iconColor={
+                    continuousMicListeningMode
+                      ? 'text-theme'
+                      : 'text-[var(--aurora-icon)]'
+                  }
+                  isProcessing={false}
+                  onClick={onToggleContinuousMode}
+                  aria-pressed={continuousMicListeningMode}
+                  aria-label={t('ContinuousMic')}
+                  title={
+                    continuousMicListeningMode
+                      ? t('ContinuousMicModeOn')
+                      : t('ContinuousMicModeOff')
+                  }
+                  className="!h-10 !min-h-10 !min-w-0 !rounded-full !px-2.5 !py-2 sm:!h-[46px] sm:!min-h-[46px] sm:!px-3 ring-0 transition-colors duration-200 focus:outline-none focus-visible:outline-none focus-visible:ring-0"
+                  data-testid="continuous-mic-toggle-button"
+                />
+              )}
             </div>
           </div>
         </div>
