@@ -20,6 +20,8 @@ jest.mock('i18next', () => ({
 
 const mockAddTask = jest.fn().mockResolvedValue(undefined)
 const mockCheckSessionId = jest.fn()
+const mockBeginSynthesis = jest.fn()
+const mockEndSynthesis = jest.fn()
 let mockStopToken = 0
 
 jest.mock('../../../features/messages/speakQueue', () => ({
@@ -33,6 +35,14 @@ jest.mock('../../../features/messages/speakQueue', () => ({
 
     static get currentStopToken() {
       return mockStopToken
+    }
+
+    static beginSynthesis() {
+      mockBeginSynthesis()
+    }
+
+    static endSynthesis() {
+      mockEndSynthesis()
     }
   },
 }))
@@ -231,5 +241,43 @@ describe('speakCharacter concurrency', () => {
       sampleRate: 24000,
     })
     await flushPromises()
+  })
+
+  it('pairs beginSynthesis and endSynthesis 1:1 across success, failure, session switch, and stop', async () => {
+    const ok = createDeferred<ArrayBuffer>()
+    const fail = createDeferred<ArrayBuffer>()
+    const oldSession = createDeferred<ArrayBuffer>()
+    const newSession = createDeferred<ArrayBuffer>()
+
+    mockSynthesizeVoicevoxApi
+      .mockReturnValueOnce(ok.promise)
+      .mockReturnValueOnce(fail.promise)
+      .mockReturnValueOnce(oldSession.promise)
+      .mockReturnValueOnce(newSession.promise)
+
+    // 成功と失敗（TTSエラー）
+    speakCharacter('session-1', { message: 'ok', emotion: 'neutral' })
+    speakCharacter('session-1', { message: 'fail', emotion: 'neutral' })
+    ok.resolve(new ArrayBuffer(1))
+    fail.reject(new Error('tts failed'))
+    await flushPromises()
+
+    // セッション切替による破棄
+    speakCharacter('session-2', { message: 'old', emotion: 'neutral' })
+    speakCharacter('session-3', { message: 'new', emotion: 'neutral' })
+    oldSession.resolve(new ArrayBuffer(1))
+    newSession.resolve(new ArrayBuffer(1))
+    await flushPromises()
+
+    // 合成中の停止（stopToken変化でキャンセル）
+    speakCharacter('session-3', { message: 'stopped', emotion: 'neutral' })
+    mockStopToken += 1
+    await flushPromises()
+    await flushPromises()
+
+    expect(mockBeginSynthesis).toHaveBeenCalledTimes(5)
+    expect(mockEndSynthesis).toHaveBeenCalledTimes(5)
+    // 成功した2件（ok, new）のみキューに投入される
+    expect(mockAddTask).toHaveBeenCalledTimes(2)
   })
 })

@@ -29,10 +29,22 @@ export class SpeakQueue {
   private queue: SpeakTask[] = []
   private isProcessing = false
   private currentSessionId: string | null = null
+  // 進行中の完了チェック（scheduleNeutralExpression）の世代トークン。
+  // キュー排水・合成終了・ストリーム終了から完了チェックが多重起動されても、
+  // 最新の1本だけが判定を実行し、完了コールバックと表情リセットの
+  // 二重実行を防ぐ。
+  private neutralCheckToken = 0
   private static speakCompletionCallbacks: (() => void)[] = []
   private static _instance: SpeakQueue | null = null
   private stopped = false
   private static stopTokenCounter = 0
+  // TTS合成中（キュー投入前）のセグメント数をセッションごとに保持する。
+  // キューが空でも現行セッションの合成が残っている間は「発話完了」と判定させない。
+  // 再生よりTTS合成が遅れてキューが一時的に空転すると、誤完了判定で isSpeaking が
+  // false に落ち、常時マイク入力モードのマイクが句読点の継ぎ目でON/OFFする問題を防ぐ。
+  // セッション単位なのは、停止済みセッションの遅い合成が残っていても
+  // 新しい会話の完了判定を阻害しないようにするため。
+  private static pendingSynthesisCounts = new Map<string, number>()
   // 直近の停止の対象範囲（'all' = 全体停止 / それ以外 = 対象セッションID）。
   // speechDispatcher が「他セッション向けの停止に巻き添えされない」判定に使う
   // 読み取り専用の付帯情報で、キュー自体の制御には使用しない。
@@ -44,6 +56,80 @@ export class SpeakQueue {
 
   public static get currentStopScope(): 'all' | string {
     return SpeakQueue.stopScope
+  }
+
+  /**
+   * 現行セッションの合成中セグメント数。完了判定はこの値のみを見る
+   * （旧セッションの遅い合成は新しい会話の完了を阻害しない）。
+   */
+  public static get currentPendingSynthesisCount(): number {
+    const sessionId = SpeakQueue.getInstance().currentSessionId
+    if (!sessionId) return 0
+    return SpeakQueue.pendingSynthesisCounts.get(sessionId) ?? 0
+  }
+
+  /**
+   * TTS合成の開始を通知します。endSynthesis と必ず対で呼ぶこと。
+   */
+  public static beginSynthesis(sessionId: string) {
+    const counts = SpeakQueue.pendingSynthesisCounts
+    counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1)
+  }
+
+  /**
+   * TTS合成の終了（成功・失敗・破棄いずれも）を通知します。
+   * 現行セッションの最後の合成が終わった時点でキューも空転していれば
+   * 完了チェックを起動する。合成が全件失敗して addTask が一度も
+   * 呼ばれないケースでも isSpeaking が固着しないようにするための救済経路。
+   */
+  public static endSynthesis(sessionId: string) {
+    const counts = SpeakQueue.pendingSynthesisCounts
+    const current = counts.get(sessionId) ?? 0
+    if (current <= 1) {
+      counts.delete(sessionId)
+    } else {
+      counts.set(sessionId, current - 1)
+    }
+
+    // 旧セッションの合成終了は現行の完了判定に影響しない
+    if (sessionId !== SpeakQueue.getInstance().currentSessionId) return
+
+    SpeakQueue.reevaluateCompletionIfIdle()
+  }
+
+  /**
+   * LLM応答ストリームの終了を通知します。完了判定は chatProcessing が
+   * 落ちるまで保留されるため、発話・合成が既に空転しているのに
+   * isSpeaking が残っている場合のみ、ここで完了チェックを再スケジュールする。
+   * isSpeaking=false のケースには関与しない（通常完了はキューの排水経路、
+   * 停止時の引き継ぎは finalizeIfIdle が担う契約のため。設計§6）。
+   */
+  public static notifyResponseStreamEnded() {
+    const instance = SpeakQueue.getInstance()
+    if (SpeakQueue.currentPendingSynthesisCount > 0) return
+    if (instance.queue.length > 0 || instance.isProcessing) return
+    if (!homeStore.getState().isSpeaking) return
+
+    void instance.scheduleNeutralExpression()
+  }
+
+  /**
+   * 現行セッションの合成が全て終わった時点でキューも空転していれば
+   * 完了チェックを起動する。発話中なら通常の完了判定
+   * （scheduleNeutralExpression）へ、停止済み（isSpeaking=false）なら
+   * finalizeIfIdle へ引き継ぐ（停止時に合成が残っていて finalizeIfIdle が
+   * スキップされたケースの再評価）。
+   */
+  private static reevaluateCompletionIfIdle() {
+    const instance = SpeakQueue.getInstance()
+    if (SpeakQueue.currentPendingSynthesisCount > 0) return
+    if (instance.queue.length > 0 || instance.isProcessing) return
+
+    if (homeStore.getState().isSpeaking) {
+      void instance.scheduleNeutralExpression()
+    } else {
+      void SpeakQueue.finalizeIfIdle()
+    }
   }
 
   // 発話完了時のコールバックを登録
@@ -96,6 +182,9 @@ export class SpeakQueue {
     instance.isProcessing = false
     SpeakQueue.stopTokenCounter++
     SpeakQueue.stopScope = 'all'
+    // 停止前から待機している完了チェックを無効化する
+    // （停止後に完了コールバックが発火してマイクが再開するのを防ぐ）
+    instance.neutralCheckToken++
     instance.clearQueue()
     SpeakQueue.stopCurrentModelSpeaking()
     homeStore.setState({ isSpeaking: false })
@@ -127,6 +216,8 @@ export class SpeakQueue {
     instance.isProcessing = false
     SpeakQueue.stopTokenCounter++
     SpeakQueue.stopScope = sessionId
+    // 停止前から待機している完了チェックを無効化する（stopAll と同様）
+    instance.neutralCheckToken++
     instance.clearQueue()
 
     SpeakQueue.stopCurrentModelSpeaking()
@@ -144,6 +235,7 @@ export class SpeakQueue {
     if (
       instance.queue.length > 0 ||
       instance.isProcessing ||
+      SpeakQueue.currentPendingSynthesisCount > 0 ||
       homeStore.getState().isSpeaking
     ) {
       return
@@ -304,10 +396,15 @@ export class SpeakQueue {
   }
 
   private async scheduleNeutralExpression() {
+    const checkToken = ++this.neutralCheckToken
     const initialLength = this.queue.length
     await new Promise((resolve) =>
       setTimeout(resolve, SpeakQueue.QUEUE_CHECK_DELAY)
     )
+
+    // より新しい完了チェックが起動されていたら、この世代の判定は破棄する
+    // （完了コールバック・表情リセットの二重実行防止）
+    if (checkToken !== this.neutralCheckToken) return
 
     if (this.shouldResetToNeutral(initialLength)) {
       await getCharacterRenderer()?.resetToIdle()
@@ -315,8 +412,15 @@ export class SpeakQueue {
   }
 
   private shouldResetToNeutral(initialLength: number): boolean {
+    // LLMストリーミング中（chatProcessing=true）は、次のセグメントがまだ
+    // 生成されておらず合成数が0でも発話継続中とみなす。ストリーム終了時は
+    // notifyResponseStreamEnded() で必ず再評価される。
     const isComplete =
-      initialLength === 0 && this.queue.length === 0 && !this.isProcessing
+      initialLength === 0 &&
+      this.queue.length === 0 &&
+      !this.isProcessing &&
+      SpeakQueue.currentPendingSynthesisCount === 0 &&
+      !homeStore.getState().chatProcessing
 
     // 発話完了時にコールバックを呼び出す
     if (isComplete) {

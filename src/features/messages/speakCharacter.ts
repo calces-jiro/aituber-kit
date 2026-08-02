@@ -334,6 +334,9 @@ const createSpeakCharacter = () => {
     let isNeedDecode = true
     const synthesisOrder = nextSynthesisOrder++
 
+    // 合成中はSpeakQueueに完了判定させない（キュー空転時の誤完了判定によるマイク誤作動防止）
+    SpeakQueue.beginSynthesis(sessionId)
+
     const processAndSynthesizePromise = (async () => {
       // TTS APIの瞬間的な連打は避けつつ、合成自体は並列で進める。
       const scheduledStartAt = Math.max(
@@ -464,6 +467,10 @@ const createSpeakCharacter = () => {
           tokenAtStart: initialToken,
         })
         flushPendingResults()
+      })
+      .finally(() => {
+        // キュー投入・破棄・エラーのいずれの経路でも必ず1回だけ合成終了を通知する
+        SpeakQueue.endSynthesis(sessionId)
       })
   }
 }
