@@ -111,6 +111,9 @@ describe('SpeakQueue', () => {
     ;(
       SpeakQueue as unknown as { speakCompletionCallbacks: (() => void)[] }
     ).speakCompletionCallbacks = []
+    ;(
+      SpeakQueue as unknown as { pendingSynthesisCounts: Map<string, number> }
+    ).pendingSynthesisCounts = new Map()
     setupMocks()
   })
 
@@ -578,6 +581,245 @@ describe('SpeakQueue', () => {
       await Promise.resolve()
 
       expect(callback).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('pending synthesis tracking', () => {
+    it('should not fire completion while a segment is still synthesizing', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+
+      // 次のセグメントが合成中の状態を再現
+      SpeakQueue.beginSynthesis('session1')
+
+      await queue.addTask(createTask('session1'))
+      jest.advanceTimersByTime(1500)
+      await Promise.resolve()
+
+      // キューは空転しているが、合成中のセグメントがあるため完了判定されない
+      expect(callback).not.toHaveBeenCalled()
+      expect(mockHomeSetState).not.toHaveBeenCalledWith({ isSpeaking: false })
+    })
+
+    it('should fire completion after the last pending synthesis ends', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+
+      SpeakQueue.beginSynthesis('session1')
+      await queue.addTask(createTask('session1'))
+      jest.advanceTimersByTime(1500)
+      await Promise.resolve()
+      expect(callback).not.toHaveBeenCalled()
+
+      // 合成完了 → キューも空なので完了チェックが再スケジュールされる
+      SpeakQueue.endSynthesis('session1')
+      jest.advanceTimersByTime(1500)
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(mockHomeSetState).toHaveBeenCalledWith({ isSpeaking: false })
+    })
+
+    it('should reset isSpeaking even if every synthesis fails without addTask', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+
+      // 合成開始したが全件失敗し、addTask が一度も呼ばれないケース
+      SpeakQueue.beginSynthesis('session1')
+      SpeakQueue.endSynthesis('session1')
+      jest.advanceTimersByTime(1500)
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(mockHomeSetState).toHaveBeenCalledWith({ isSpeaking: false })
+    })
+
+    it('should not block a new session when a stale synthesis remains', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+      // 旧セッションの遅い合成が残ったまま停止 → 新セッション開始
+      SpeakQueue.beginSynthesis('session1')
+      SpeakQueue.stopAll()
+      queue.checkSessionId('session2')
+
+      await queue.addTask(createTask('session2'))
+      jest.advanceTimersByTime(1500)
+      await Promise.resolve()
+
+      // 旧セッションの合成が未完了でも、新セッションの完了判定は阻害されない
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(mockHomeSetState).toHaveBeenCalledWith({ isSpeaking: false })
+
+      // 旧セッションの合成が後から終わっても現行セッションには影響しない
+      callback.mockClear()
+      SpeakQueue.endSynthesis('session1')
+      jest.advanceTimersByTime(1500)
+      await Promise.resolve()
+      expect(SpeakQueue.currentPendingSynthesisCount).toBe(0)
+    })
+
+    it('should defer completion while the LLM stream is still processing', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const homeState = {
+        isSpeaking: true,
+        chatProcessing: true,
+        viewer: {
+          model: {
+            speak: mockModelSpeak,
+            speakPcm16Stream: mockModelSpeakPcm16Stream,
+            stopSpeaking: mockModelStopSpeaking,
+            playEmotion: mockModelPlayEmotion,
+          },
+        },
+      }
+      mockHomeGetState.mockImplementation(() => homeState)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+
+      // ストリーミング中: キューも合成数も一時的に0になるが完了判定しない
+      await queue.addTask(createTask('session1'))
+      jest.advanceTimersByTime(1500)
+      await Promise.resolve()
+      expect(callback).not.toHaveBeenCalled()
+
+      // ストリーム終了 → 再評価で完了判定が走る
+      homeState.chatProcessing = false
+      SpeakQueue.notifyResponseStreamEnded()
+      jest.advanceTimersByTime(1500)
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(callback).toHaveBeenCalledTimes(1)
+      expect(mockHomeSetState).toHaveBeenCalledWith({ isSpeaking: false })
+    })
+
+    it('should keep finalizeIfIdle idle-guarded while synthesis is pending', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const homeState = {
+        isSpeaking: false,
+        chatProcessing: false,
+        viewer: {
+          model: {
+            speak: mockModelSpeak,
+            stopSpeaking: mockModelStopSpeaking,
+            playEmotion: mockModelPlayEmotion,
+          },
+        },
+      }
+      mockHomeGetState.mockImplementation(() => homeState)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+      SpeakQueue.beginSynthesis('session1')
+      await SpeakQueue.finalizeIfIdle()
+
+      expect(callback).not.toHaveBeenCalled()
+      expect(mockModelPlayEmotion).not.toHaveBeenCalled()
+
+      // 停止後に残っていた合成が終わると finalizeIfIdle が引き継がれる
+      SpeakQueue.endSynthesis('session1')
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(callback).toHaveBeenCalledTimes(1)
+    })
+
+    it('should fire completion only once when synthesis ends while a completion check is pending', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+
+      SpeakQueue.beginSynthesis('session1')
+      // キュー排水で完了チェック（タイマー#1）が起動する
+      await queue.addTask(createTask('session1'))
+
+      // タイマー#1の待機中に最後の合成が終了 → タイマー#2が起動する
+      jest.advanceTimersByTime(800)
+      SpeakQueue.endSynthesis('session1')
+
+      // タイマー#1の1500ms経過: 旧世代なので判定は破棄される
+      jest.advanceTimersByTime(700)
+      await Promise.resolve()
+      expect(callback).not.toHaveBeenCalled()
+
+      // タイマー#2の1500ms経過: 最新世代のみが完了判定を実行する
+      jest.advanceTimersByTime(800)
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(callback).toHaveBeenCalledTimes(1)
+      const speakingFalseCalls = mockHomeSetState.mock.calls.filter(
+        (call) => call[0] && call[0].isSpeaking === false
+      )
+      expect(speakingFalseCalls).toHaveLength(1)
+    })
+
+    it('should not fire completion when stopAll is called while a completion check is pending', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+
+      // キュー排水で完了チェックが起動する
+      await queue.addTask(createTask('session1'))
+
+      // タイマー待機中に停止 → トークンが無効化される
+      jest.advanceTimersByTime(800)
+      SpeakQueue.stopAll()
+
+      jest.advanceTimersByTime(700)
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(callback).not.toHaveBeenCalled()
+    })
+
+    it('should not fire completion when the current session is stopped while a completion check is pending', async () => {
+      const callback = jest.fn()
+      SpeakQueue.onSpeakCompletion(callback)
+
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+
+      await queue.addTask(createTask('session1'))
+
+      jest.advanceTimersByTime(800)
+      SpeakQueue.stopSession('session1')
+
+      jest.advanceTimersByTime(700)
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(callback).not.toHaveBeenCalled()
+    })
+
+    it('should not go negative when endSynthesis is called without begin', () => {
+      const queue = SpeakQueue.getInstance()
+      queue.checkSessionId('session1')
+      SpeakQueue.endSynthesis('session1')
+      expect(SpeakQueue.currentPendingSynthesisCount).toBe(0)
     })
   })
 

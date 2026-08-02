@@ -98,6 +98,10 @@ export const processAIResponse = async (
   // 完了コールバック・表情リセットを引き継ぐ（設計§5.4）
   if (dispatcher.disabled) {
     await SpeakQueue.finalizeIfIdle()
+  } else {
+    // 完了判定はストリーミング中（chatProcessing=true）保留されるため、
+    // 発話・合成が既に空転していた場合に備えてストリーム終了時に再評価する
+    SpeakQueue.notifyResponseStreamEnded()
   }
 }
 
