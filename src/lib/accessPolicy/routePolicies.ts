@@ -294,6 +294,17 @@ export const routePolicies = {
     restrictedBehavior: 'deny',
     waf: { embedAllowed: true },
   },
+  '/api/settings-store': {
+    path: '/api/settings-store',
+    featureName: 'settings-store',
+    methods: ['GET', 'POST'],
+    resources: ['fs-read', 'fs-write'],
+    // fork独自: 設定のサーバー保存(NEXT_PUBLIC_SETTINGS_SERVER_SYNC、既定OFF)。
+    // シークレットはクライアント/サーバー両側でstripされるため secret: none。
+    // 無認証GETで非シークレット設定を返す点は自宅LAN限定運用の受容リスク
+    secret: { kind: 'none' },
+    restrictedBehavior: 'deny',
+  },
   '/api/stylebertvits2': {
     path: '/api/stylebertvits2',
     featureName: 'stylebertvits2',
