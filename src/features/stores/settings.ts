@@ -1,6 +1,7 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
 import { exclusivityMiddleware } from './exclusionMiddleware'
+import { settingsSyncStorage } from '@/features/settingsSync/settingsSyncStorage'
 
 import { KoeiroParam, DEFAULT_PARAM } from '@/features/constants/koeiroParam'
 import {
@@ -1037,9 +1038,11 @@ const settingsMigrationSteps: Record<number, SettingsMigrationStep> = {
   },
 }
 
-const CURRENT_SETTINGS_VERSION = Object.keys(settingsMigrationSteps).length
+export const CURRENT_SETTINGS_VERSION = Object.keys(
+  settingsMigrationSteps
+).length
 
-const runSettingsMigrations = (
+export const runSettingsMigrations = (
   state: PersistedSettingsState,
   storedVersion: number
 ): Partial<SettingsState> => {
@@ -1080,6 +1083,8 @@ const settingsStore = create<SettingsState>()(
   exclusivityMiddleware(
     persist(() => getInitialValuesFromEnv(), {
       name: 'aitube-kit-settings',
+      // フラグOFF時は従来のlocalStorage動作と同一(fork独自: 設定のサーバー同期)
+      storage: createJSONStorage(() => settingsSyncStorage),
       version: CURRENT_SETTINGS_VERSION,
       migrate: (persistedState, storedVersion) =>
         runSettingsMigrations(

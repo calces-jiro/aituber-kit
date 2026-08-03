@@ -48,6 +48,8 @@ certificates
 
 /logs/*
 
+/settings-store/
+
 # Live2D files
 public/live2d/*
 !public/live2d/nike01
