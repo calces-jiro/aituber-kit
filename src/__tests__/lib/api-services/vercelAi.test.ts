@@ -217,6 +217,32 @@ describe('vercelAi service helpers', () => {
       })
     })
 
+    it('temperatureがundefinedの場合はstreamTextにtemperatureキー自体を渡さない', async () => {
+      const response = new Response('stream-body')
+      const mockToUIMessageStreamResponse = jest.fn().mockReturnValue(response)
+      mockStreamText.mockResolvedValue({
+        textStream: 'text-stream',
+        toUIMessageStreamResponse: mockToUIMessageStreamResponse,
+      } as never)
+
+      await streamAiText({
+        model: 'claude-sonnet-5',
+        registry: mockRegistry as any,
+        service: 'anthropic',
+        messages: testMessages,
+        temperature: undefined,
+        maxTokens: 150,
+        options: {},
+      })
+
+      expect(mockStreamText).toHaveBeenCalledWith({
+        model: 'mock-model',
+        messages: testMessages,
+        maxOutputTokens: 150,
+      })
+      expect(mockStreamText.mock.calls[0][0]).not.toHaveProperty('temperature')
+    })
+
     it('returns a 500 response when streaming fails', async () => {
       mockStreamText.mockRejectedValue(new Error('network down'))
 
@@ -258,6 +284,28 @@ describe('vercelAi service helpers', () => {
       })
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ text: 'final text' })
+    })
+
+    it('temperatureがundefinedの場合はgenerateTextにtemperatureキー自体を渡さない', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'final text' } as any)
+
+      await generateAiText({
+        model: 'claude-sonnet-5',
+        registry: mockRegistry as any,
+        service: 'anthropic' as any,
+        messages: testMessages,
+        temperature: undefined,
+        maxTokens: 100,
+      })
+
+      expect(mockGenerateText).toHaveBeenCalledWith({
+        model: 'mock-model',
+        messages: testMessages,
+        maxOutputTokens: 100,
+      })
+      expect(mockGenerateText.mock.calls[0][0]).not.toHaveProperty(
+        'temperature'
+      )
     })
 
     it('passes providerOptions to generateText when provided', async () => {

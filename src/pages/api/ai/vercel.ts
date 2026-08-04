@@ -13,7 +13,11 @@ import {
   generateAiText,
 } from '@/lib/api-services/vercelAi'
 import { buildReasoningProviderOptions } from '@/lib/api-services/providerOptionsBuilder'
-import { googleSearchGroundingModels } from '@/features/constants/aiModels'
+import {
+  googleSearchGroundingModels,
+  isTemperatureUnsupportedModel,
+} from '@/features/constants/aiModels'
+import type { AIService } from '@/features/constants/settings'
 import { pipeResponse } from '@/utils/pipeResponse'
 import { withAccessPolicy } from '@/lib/accessPolicy/withAccessPolicy'
 import type { PolicyGate } from '@/lib/accessPolicy/withAccessPolicy'
@@ -117,6 +121,15 @@ async function handler(
     })
   }
 
+  // temperature非対応モデル(Claude 5系)にはキー自体を送らない
+  // (指定するとAPIが `temperature` is deprecated エラー(400)を返すため)
+  const effectiveTemperature = isTemperatureUnsupportedModel(
+    aiService as AIService,
+    modifiedModel
+  )
+    ? undefined
+    : temperature
+
   try {
     // Provider Registryの作成
     const registry = createAIRegistry(aiService as VercelAIService, {
@@ -175,7 +188,7 @@ async function handler(
         registry,
         service: aiService as VercelAIService,
         messages: modifiedMessages,
-        temperature,
+        temperature: effectiveTemperature,
         maxTokens,
         options,
         providerOptions,
@@ -186,7 +199,7 @@ async function handler(
         registry,
         service: aiService as VercelAIService,
         messages: modifiedMessages,
-        temperature,
+        temperature: effectiveTemperature,
         maxTokens,
         providerOptions,
       })

@@ -164,7 +164,8 @@ export async function streamAiText({
   registry: AIRegistry
   service: VercelAIService
   messages: Message[]
-  temperature: number
+  /** undefinedの場合はリクエストにtemperatureキー自体を含めない(非対応モデル用) */
+  temperature: number | undefined
   maxTokens: number
   options?: Record<string, unknown>
   providerOptions?: Record<string, Record<string, unknown>>
@@ -175,7 +176,7 @@ export async function streamAiText({
     const result = await streamText({
       model: languageModel,
       messages: messages as ModelMessage[],
-      temperature,
+      ...(temperature !== undefined && { temperature }),
       maxOutputTokens: maxTokens,
       ...(providerOptions && {
         providerOptions: providerOptions as Parameters<
@@ -220,7 +221,8 @@ export async function generateAiText({
   registry: AIRegistry
   service: VercelAIService
   messages: Message[]
-  temperature: number
+  /** undefinedの場合はリクエストにtemperatureキー自体を含めない(非対応モデル用) */
+  temperature: number | undefined
   maxTokens: number
   providerOptions?: Record<string, Record<string, unknown>>
 }) {
@@ -230,7 +232,7 @@ export async function generateAiText({
     const result = await generateText({
       model: languageModel,
       messages: messages as ModelMessage[],
-      temperature,
+      ...(temperature !== undefined && { temperature }),
       maxOutputTokens: maxTokens,
       ...(providerOptions && {
         providerOptions: providerOptions as Parameters<
