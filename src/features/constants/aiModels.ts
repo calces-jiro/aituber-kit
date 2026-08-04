@@ -19,6 +19,12 @@ interface ModelInfo {
   reasoningEfforts?: ReasoningEffort[]
   /** tokenBudget設定が利用可能か */
   reasoningTokenBudget?: boolean
+  /**
+   * temperatureパラメータ非対応かどうか。
+   * Claude 5系(claude-fable-5, claude-sonnet-5)はtemperatureを指定すると
+   * invalid_request_error(`temperature` is deprecated for this model.)になる
+   */
+  temperatureUnsupported?: boolean
 }
 
 /**
@@ -252,6 +258,14 @@ const modelDefinitions: Record<AIService, ModelInfo[]> = {
       multiModal: true,
       reasoningEfforts: [],
       reasoningTokenBudget: true,
+      temperatureUnsupported: true,
+    },
+    {
+      name: 'claude-sonnet-5',
+      multiModal: true,
+      reasoningEfforts: [],
+      reasoningTokenBudget: true,
+      temperatureUnsupported: true,
     },
     {
       name: 'claude-opus-4-8',
@@ -1015,4 +1029,19 @@ export function needsReasoningTokenBudget(
 
   const info = findModelInfo(service, model)
   return info?.reasoningTokenBudget ?? false
+}
+
+/**
+ * モデルがtemperatureパラメータ非対応かどうかを判定する
+ * (Claude 5系はtemperatureを送るとAPIがinvalid_request_errorを返すため、
+ *  リクエストからキー自体を除外する必要がある)
+ * @param service AIサービス名
+ * @param model モデル名
+ * @returns temperature非対応の場合はtrue
+ */
+export function isTemperatureUnsupportedModel(
+  service: AIService,
+  model: string
+): boolean {
+  return findModelInfo(service, model)?.temperatureUnsupported === true
 }

@@ -475,6 +475,72 @@ describe('/api/ai/vercel handler', () => {
     })
   })
 
+  it('temperature非対応モデル(claude-sonnet-5)ではtemperatureをundefinedにして渡す', async () => {
+    process.env.ANTHROPIC_API_KEY = 'env-anthropic'
+    process.env.AITUBERKIT_SERVER_SECRET_ACCESS_MODE = 'unprotected'
+    mockModifyMessages.mockReturnValue([
+      { role: 'user', content: 'hello' },
+    ] as any)
+    mockStreamAiText.mockResolvedValue(new Response('stream', { status: 200 }))
+
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        messages: [],
+        apiKey: '',
+        aiService: 'anthropic',
+        model: 'claude-sonnet-5',
+        stream: true,
+        temperature: 0.7,
+        maxTokens: 500,
+        localLlmUrl: '',
+        azureEndpoint: '',
+      },
+    })
+
+    await handler(req as any, res as any)
+
+    expect(mockStreamAiText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'claude-sonnet-5',
+        temperature: undefined,
+      })
+    )
+  })
+
+  it('temperature対応モデル(claude-sonnet-4-6)では従来どおりtemperatureを渡す', async () => {
+    process.env.ANTHROPIC_API_KEY = 'env-anthropic'
+    process.env.AITUBERKIT_SERVER_SECRET_ACCESS_MODE = 'unprotected'
+    mockModifyMessages.mockReturnValue([
+      { role: 'user', content: 'hello' },
+    ] as any)
+    mockStreamAiText.mockResolvedValue(new Response('stream', { status: 200 }))
+
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        messages: [],
+        apiKey: '',
+        aiService: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        stream: true,
+        temperature: 0.7,
+        maxTokens: 500,
+        localLlmUrl: '',
+        azureEndpoint: '',
+      },
+    })
+
+    await handler(req as any, res as any)
+
+    expect(mockStreamAiText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'claude-sonnet-4-6',
+        temperature: 0.7,
+      })
+    )
+  })
+
   it('does not guard non-azure requests only because AZURE_ENDPOINT is configured', async () => {
     process.env.AZURE_ENDPOINT =
       'https://my-resource.openai.azure.com/openai/deployments/my-deploy/chat/completions?api-version=2024-05-01-preview'

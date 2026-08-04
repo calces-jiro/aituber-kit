@@ -16,6 +16,7 @@ import {
   isMultiModalAvailable,
   isReasoningModel,
   isSearchGroundingModel,
+  isTemperatureUnsupportedModel,
   googleSearchGroundingModels,
   openAIRealtimeModels,
   openAIAudioModels,
@@ -366,6 +367,33 @@ describe('aiModels', () => {
       const b = getOpenAIRealtimeModels()
       expect(a).not.toBe(b)
       expect(a).toEqual(b)
+    })
+  })
+
+  describe('isTemperatureUnsupportedModel', () => {
+    it('Claude 5系モデルはtemperature非対応と判定される', () => {
+      expect(
+        isTemperatureUnsupportedModel('anthropic', 'claude-sonnet-5')
+      ).toBe(true)
+      expect(isTemperatureUnsupportedModel('anthropic', 'claude-fable-5')).toBe(
+        true
+      )
+    })
+
+    it('従来のClaudeモデルはtemperature対応と判定される', () => {
+      expect(
+        isTemperatureUnsupportedModel('anthropic', 'claude-sonnet-4-6')
+      ).toBe(false)
+      expect(
+        isTemperatureUnsupportedModel('anthropic', 'claude-opus-4-8')
+      ).toBe(false)
+    })
+
+    it('他サービスや未定義モデルはfalseを返す', () => {
+      expect(isTemperatureUnsupportedModel('openai', 'gpt-4o')).toBe(false)
+      expect(isTemperatureUnsupportedModel('anthropic', 'unknown-model')).toBe(
+        false
+      )
     })
   })
 })
