@@ -321,6 +321,12 @@ const parseEnvInt = (value: string | undefined, fallback: number): number => {
   return Number.isNaN(parsed) ? fallback : parsed
 }
 
+// parseEnvIntのfloat版（initialSpeechTimeout=0「無制限」などを.envで表現するため）
+const parseEnvFloat = (value: string | undefined, fallback: number): number => {
+  const parsed = parseFloat(value ?? '')
+  return Number.isNaN(parsed) ? fallback : parsed
+}
+
 // Function to get initial values from environment variables
 const getInitialWhisperTranscriptionModel = (): WhisperTranscriptionModel => {
   const configuredModel = migrateOpenAITranscriptionModel(
@@ -642,8 +648,10 @@ const getInitialValuesFromEnv = (): SettingsState => ({
       .NEXT_PUBLIC_SPEECH_RECOGNITION_MODE as SpeechRecognitionMode) ||
     'browser',
   whisperTranscriptionModel: getInitialWhisperTranscriptionModel(),
-  initialSpeechTimeout:
-    parseFloat(process.env.NEXT_PUBLIC_INITIAL_SPEECH_TIMEOUT || '5.0') || 5.0,
+  initialSpeechTimeout: parseEnvFloat(
+    process.env.NEXT_PUBLIC_INITIAL_SPEECH_TIMEOUT,
+    5.0
+  ),
   chatLogWidth:
     parseFloat(process.env.NEXT_PUBLIC_CHAT_LOG_WIDTH || '400') || 400,
   chatLogPosition:
